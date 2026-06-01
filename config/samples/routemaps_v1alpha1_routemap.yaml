@@ -1,0 +1,9 @@
+apiVersion: routemaps.github.com/v1alpha1
+kind: Routemap
+metadata:
+  labels:
+    app.kubernetes.io/name: routemap-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: routemap-sample
+spec:
+  # TODO(user): Add fields here

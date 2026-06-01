@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- routemaps_v1alpha1_routemap.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
