@@ -10,14 +10,21 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions: {}
 
 jobs:
   test-e2e:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     permissions:
       contents: read
     name: Run on Ubuntu
     runs-on: ubuntu-latest
+    env:
+      KIND_VERSION: v0.31.0
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -29,9 +36,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install the latest version of kind
+      - name: Install kind
         run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-$(go env GOARCH)
+          curl -Lo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$(go env GOARCH)"
           chmod +x ./kind
           sudo mv ./kind /usr/local/bin/kind
 
@@ -39,6 +46,4 @@ jobs:
         run: kind version
 
       - name: Running Test e2e
-        run: |
-          go mod tidy
-          make test-e2e
+        run: make test-e2e

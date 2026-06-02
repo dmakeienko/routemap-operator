@@ -2,7 +2,13 @@ name: Tests
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions: {}
 
@@ -24,6 +30,4 @@ jobs:
           go-version-file: go.mod
 
       - name: Running Tests
-        run: |
-          go mod tidy
-          make test
+        run: make test
