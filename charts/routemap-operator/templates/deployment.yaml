@@ -40,10 +40,21 @@ spec:
             - --leader-elect
             {{- end }}
             - --health-probe-bind-address={{ .Values.healthProbeBindAddress }}
+            {{- if .Values.dashboard.enabled }}
+            - --enable-dashboard=true
+            - --dashboard-bind-address={{ .Values.dashboard.bindAddress }}
+            {{- else }}
+            - --enable-dashboard=false
+            {{- end }}
           ports:
             - name: health
               containerPort: 8081
               protocol: TCP
+            {{- if .Values.dashboard.enabled }}
+            - name: dashboard
+              containerPort: 9090
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:

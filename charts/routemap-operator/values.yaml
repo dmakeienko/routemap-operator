@@ -42,6 +42,15 @@ leaderElect: true
 
 healthProbeBindAddress: ":8081"
 
+dashboard:
+  enabled: true
+  bindAddress: ":9090"
+  # service controls how the dashboard port is exposed
+  service:
+    enabled: true
+    type: ClusterIP
+    port: 9090
+
 livenessProbe:
   httpGet:
     path: /healthz

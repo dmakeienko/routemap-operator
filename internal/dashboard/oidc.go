@@ -25,7 +25,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -79,9 +81,9 @@ func (o *OIDCConfig) Validate(w http.ResponseWriter, r *http.Request, ns, name s
 		return true
 	}
 
-	// Verify the HMAC-signed session cookie.
+	// Verify the HMAC-signed session cookie, bound to this specific Routemap.
 	if cookie, err := r.Cookie(sessionCookieName); err == nil {
-		if o.verifySessionToken(cookie.Value) {
+		if o.verifySessionToken(cookie.Value, ns, name, auth.IssuerURL, auth.ClientID) {
 			return true
 		}
 	}
@@ -132,6 +134,17 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request, view
 
 	log := logf.Log.WithName("dashboard-oidc")
 
+	// Derive ns/name from the URL path (/{ns}/{name}/callback).
+	parts := splitPath(r.URL.Path)
+	ns, name := "", ""
+	if len(parts) >= 2 {
+		ns, name = parts[0], parts[1]
+	}
+	dashPath := "/"
+	if ns != "" && name != "" {
+		dashPath = fmt.Sprintf("/%s/%s", ns, name)
+	}
+
 	// Validate state.
 	stateCookie, err := r.Cookie(stateCookieName)
 	if err != nil || stateCookie.Value != r.URL.Query().Get("state") {
@@ -176,8 +189,8 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request, view
 		return
 	}
 
-	// Set HMAC-signed session cookie.
-	sessionVal, err := s.OIDC.makeSessionToken()
+	// Set HMAC-signed session cookie, scoped to this Routemap's path.
+	sessionVal, err := s.OIDC.makeSessionToken(ns, name, auth.IssuerURL, auth.ClientID)
 	if err != nil {
 		log.Error(err, "Failed to create session token")
 		http.Error(w, "Internal error", http.StatusInternalServerError)
@@ -186,22 +199,21 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request, view
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
 		Value:    sessionVal,
+		Path:     dashPath,
 		HttpOnly: true,
 		Secure:   r.TLS != nil,
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(sessionTTL.Seconds()),
 	})
 
-	// Redirect to dashboard root.
-	parts := splitPath(r.URL.Path) // /{ns}/{name}/callback
-	dashPath := "/"
-	if len(parts) >= 2 {
-		dashPath = fmt.Sprintf("/%s/%s", parts[0], parts[1])
-	}
 	http.Redirect(w, r, dashPath, http.StatusFound)
 }
 
 func (o *OIDCConfig) getOrBuildEntry(ctx context.Context, auth *routemapsv1alpha1.AuthSpec) (*oidcEntry, error) {
+	if err := validateIssuerURL(auth.IssuerURL); err != nil {
+		return nil, err
+	}
+
 	cacheKey := auth.IssuerURL + "|" + auth.ClientID
 
 	o.mu.RLock()
@@ -213,7 +225,7 @@ func (o *OIDCConfig) getOrBuildEntry(ctx context.Context, auth *routemapsv1alpha
 
 	provider, err := gooidc.NewProvider(ctx, auth.IssuerURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("OIDC provider discovery failed: %w", err)
 	}
 
 	entry := &oidcEntry{
@@ -239,22 +251,87 @@ func randomToken() string {
 }
 
 // sessionPayload is the signed body embedded in a session cookie.
+// It is bound to a specific Routemap (Namespace/Name) and IdP (Iss/Aud)
+// so that a token issued for one dashboard cannot be replayed on another.
 type sessionPayload struct {
-	Sub string `json:"sub"`
-	Exp int64  `json:"exp"`
+	Sub       string `json:"sub"`
+	Exp       int64  `json:"exp"`
+	Namespace string `json:"ns"`
+	Name      string `json:"name"`
+	Iss       string `json:"iss"`
+	Aud       string `json:"aud"`
+}
+
+// validateIssuerURL rejects issuer URLs that could be used for SSRF:
+// only https:// is allowed, and the resolved hostname must not be a
+// loopback, link-local, or RFC1918 address.
+func validateIssuerURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid issuer URL: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("issuer URL must use https, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	addrs, err := net.LookupHost(host)
+	if err != nil {
+		// Treat resolution failure as a rejection to avoid blind DNS-rebind.
+		return fmt.Errorf("cannot resolve issuer host %q: %w", host, err)
+	}
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || isPrivate(ip) {
+			return fmt.Errorf("issuer URL resolves to a private/loopback address (%s)", addr)
+		}
+	}
+	return nil
+}
+
+// privateRanges lists RFC1918 + RFC4193 ULA ranges.
+var privateRanges = func() []*net.IPNet {
+	cidrs := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"100.64.0.0/10", // RFC6598 shared address
+		"fc00::/7",      // IPv6 ULA
+	}
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, n, _ := net.ParseCIDR(c)
+		nets = append(nets, n)
+	}
+	return nets
+}()
+
+func isPrivate(ip net.IP) bool {
+	for _, n := range privateRanges {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // makeSessionToken creates a base64(payload).base64(hmac) session token signed
-// with OIDCConfig.SessionKey. The payload embeds an expiry timestamp so the
-// token self-expires even without server-side state.
-func (o *OIDCConfig) makeSessionToken() (string, error) {
+// with OIDCConfig.SessionKey. The payload embeds the Routemap identity and IdP
+// coordinates so that tokens cannot be replayed across dashboards.
+func (o *OIDCConfig) makeSessionToken(ns, name, issuer, clientID string) (string, error) {
 	sub := make([]byte, 16)
 	if _, err := rand.Read(sub); err != nil {
 		return "", err
 	}
 	payload := sessionPayload{
-		Sub: base64.RawURLEncoding.EncodeToString(sub),
-		Exp: time.Now().Add(sessionTTL).Unix(),
+		Sub:       base64.RawURLEncoding.EncodeToString(sub),
+		Exp:       time.Now().Add(sessionTTL).Unix(),
+		Namespace: ns,
+		Name:      name,
+		Iss:       issuer,
+		Aud:       clientID,
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -267,8 +344,9 @@ func (o *OIDCConfig) makeSessionToken() (string, error) {
 	return payloadEnc + "." + sig, nil
 }
 
-// verifySessionToken validates the HMAC signature and expiry of a session token.
-func (o *OIDCConfig) verifySessionToken(tokenStr string) bool {
+// verifySessionToken validates the HMAC signature, expiry, and Routemap binding
+// of a session token. All five claims must match exactly.
+func (o *OIDCConfig) verifySessionToken(tokenStr, ns, name, issuer, clientID string) bool {
 	dot := -1
 	for i := len(tokenStr) - 1; i >= 0; i-- {
 		if tokenStr[i] == '.' {
@@ -297,7 +375,13 @@ func (o *OIDCConfig) verifySessionToken(tokenStr string) bool {
 	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 		return false
 	}
-	return time.Now().Unix() < payload.Exp
+	if time.Now().Unix() >= payload.Exp {
+		return false
+	}
+	return payload.Namespace == ns &&
+		payload.Name == name &&
+		payload.Iss == issuer &&
+		payload.Aud == clientID
 }
 
 func splitPath(path string) []string {

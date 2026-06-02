@@ -1,0 +1,18 @@
+{{- if and .Values.dashboard.enabled .Values.dashboard.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "routemap-operator.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "routemap-operator.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.dashboard.service.type }}
+  selector:
+    {{- include "routemap-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: dashboard
+      port: {{ .Values.dashboard.service.port }}
+      targetPort: dashboard
+      protocol: TCP
+{{- end }}
