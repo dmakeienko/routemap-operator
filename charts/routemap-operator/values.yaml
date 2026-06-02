@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: dmakeienko12/routemap-operator
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   tag: ""
 
 imagePullSecrets: []
@@ -50,6 +50,28 @@ dashboard:
     enabled: true
     type: ClusterIP
     port: 9090
+  # expose creates an HTTPRoute or Ingress in front of the dashboard service.
+  # Set type to "HTTPRoute" or "Ingress"; leave empty to disable.
+  expose:
+    type: ""
+    # path: /
+    # annotations: {}
+
+    # HTTPRoute-specific fields (type: HTTPRoute)
+    # parentRefs:
+    #   - name: my-gateway
+    #     namespace: gateway-ns
+    # hostnames:
+    #   - dashboard.example.com
+
+    # Ingress-specific fields (type: Ingress)
+    # ingressClassName: nginx
+    # hostnames:
+    #   - dashboard.example.com
+    # tls:
+    #   - secretName: dashboard-tls
+    #     hosts:
+    #       - dashboard.example.com
 
 livenessProbe:
   httpGet:
