@@ -12,8 +12,10 @@
 ## Install with Helm (recommended)
 
 ```bash
-# Install CRDs + operator in one step
-helm install routemap-operator ./charts/routemap-operator \
+helm repo add routemap-operator https://dmakeienko.github.io/routemap-operator
+helm repo update
+
+helm install routemap-operator routemap-operator/routemap-operator \
   --namespace routemap-system \
   --create-namespace
 ```
@@ -44,7 +46,7 @@ The Helm chart deploys:
 Override values at install time:
 
 ```bash
-helm install routemap-operator ./charts/routemap-operator \
+helm install routemap-operator routemap-operator/routemap-operator \
   --namespace routemap-system \
   --create-namespace \
   --set image.tag=v0.2.0 \
@@ -232,6 +234,7 @@ Available metric:
 # Helm
 helm uninstall routemap-operator -n routemap-system
 kubectl delete -f config/crd/bases/   # removes all Routemap objects!
+helm repo remove routemap-operator
 
 # kustomize
 make undeploy    # remove operator Deployment and RBAC

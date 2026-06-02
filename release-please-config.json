@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "go",
+  "extra-files": [
+    {
+      "type": "yaml",
+      "path": "charts/routemap-operator/Chart.yaml",
+      "jsonpath": "$.version"
+    },
+    {
+      "type": "yaml",
+      "path": "charts/routemap-operator/Chart.yaml",
+      "jsonpath": "$.appVersion"
+    }
+  ],
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "docs", "section": "Documentation" },
+    { "type": "ci", "section": "CI/CD" },
+    { "type": "chore", "section": "Chores", "hidden": false },
+    { "type": "refactor", "section": "Code Refactoring" },
+    { "type": "perf", "section": "Performance Improvements" }
+  ]
+}

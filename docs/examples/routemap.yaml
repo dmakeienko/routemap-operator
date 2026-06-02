@@ -1,0 +1,123 @@
+---
+# Example 1: Basic — watch own namespace, Ingress only, no health checks
+apiVersion: routemaps.github.com/v1alpha1
+kind: Routemap
+metadata:
+  name: my-app-routes
+  namespace: default
+spec:
+  displayName: "My Application Routes"
+  sources:
+    - Ingress
+---
+# Example 2: Multi-namespace with health checking enabled
+apiVersion: routemaps.github.com/v1alpha1
+kind: Routemap
+metadata:
+  name: platform-routes
+  namespace: routemap
+spec:
+  displayName: "Platform Services"
+  namespaces:
+    names:
+      - default
+      - staging
+      - production
+  sources:
+    - Ingress
+    - HTTPRoute
+  healthCheck:
+    enabled: true
+    annotationKey: routemap.github.com/healthcheck
+    interval: 30s
+    timeout: 5s
+    expectedStatus: 200
+---
+# Example 3: Cluster-wide with label selector
+apiVersion: routemaps.github.com/v1alpha1
+kind: Routemap
+metadata:
+  name: all-team-routes
+  namespace: routemap-system
+spec:
+  displayName: "All Team Routes"
+  namespaces:
+    selector:
+      matchLabels:
+        team: backend
+  sources:
+    - Ingress
+    - HTTPRoute
+  healthCheck:
+    enabled: true
+    interval: 60s
+    timeout: 10s
+    expectedStatus: 200
+# ---
+# Example 4: Watch all namespaces, OIDC-protected dashboard
+apiVersion: routemaps.github.com/v1alpha1
+kind: Routemap
+metadata:
+  name: global-routes
+  namespace: routemap
+spec:
+  displayName: "Global Route Map"
+  namespaces:
+    watchAll: true
+  sources:
+    - Ingress
+    - HTTPRoute
+  healthCheck:
+    enabled: true
+    interval: 30s
+    timeout: 5s
+    expectedStatus: 200
+  # auth:
+  #   issuerURL: https://accounts.google.com
+  #   clientID: my-client-id
+  #   clientSecretRef:
+  #     name: routemap-oidc-secret
+  #     key: client-secret
+  #   redirectURL: https://routemap.example.com/auth/callback
+---
+# # Secret referenced by the OIDC auth example above
+# apiVersion: v1
+# kind: Secret
+# metadata:
+#   name: routemap-oidc-secret
+#   namespace: routemap-system
+# type: Opaque
+# stringData:
+#   client-secret: "replace-with-your-oidc-client-secret"
+# ---
+# # Example Ingress with health-check annotation (discovered by the operator)
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: my-app
+#   namespace: default
+#   annotations:
+#     routemap.github.com/healthcheck: /healthz
+# spec:
+#   rules:
+#     - host: my-app.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: my-app-svc
+#                 port:
+#                   number: 80
+#           - path: /api
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: my-app-api-svc
+#                 port:
+#                   number: 8080
+#   tls:
+#     - hosts:
+#         - my-app.example.com
+#       secretName: my-app-tls
