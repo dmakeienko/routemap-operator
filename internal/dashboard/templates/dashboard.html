@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{.Title}} — Routemap Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f5f5f5; color: #1a1a1a; }
+  header { background: #1e3a5f; color: #fff; padding: 1rem 2rem; display: flex; align-items: center; gap: 1rem; }
+  header h1 { font-size: 1.4rem; font-weight: 600; }
+  header .meta { font-size: 0.8rem; opacity: 0.7; margin-left: auto; }
+  .toolbar { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 0.75rem 2rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center; }
+  .toolbar label { font-size: 0.85rem; font-weight: 500; color: #555; }
+  .toolbar select, .toolbar input { border: 1px solid #ccc; border-radius: 4px; padding: 0.35rem 0.6rem; font-size: 0.85rem; }
+  .main { padding: 1.5rem 2rem; }
+  .group-header { font-size: 0.9rem; font-weight: 700; color: #555; text-transform: uppercase; letter-spacing: 0.05em; margin: 1.5rem 0 0.75rem; border-bottom: 2px solid #ddd; padding-bottom: 0.4rem; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 0.5rem; }
+  .card { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem 1.2rem; text-decoration: none; color: inherit; display: flex; flex-direction: column; gap: 0.4rem; transition: box-shadow 0.15s; position: relative; }
+  .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.1); }
+  .card-top { display: flex; align-items: center; gap: 0.5rem; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .dot-healthy   { background: #22c55e; }
+  .dot-unhealthy { background: #ef4444; }
+  .dot-unknown   { background: #94a3b8; }
+  .dot-pending   { background: #eab308; }
+  .dot-nocheck   { background: #d1d5db; }
+  .card-host { font-weight: 600; font-size: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card-path { font-size: 0.82rem; color: #555; }
+  .card-meta { font-size: 0.75rem; color: #888; display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.2rem; }
+  .badge { background: #e8f0fe; color: #3b4ea6; border-radius: 4px; padding: 0.1rem 0.4rem; font-size: 0.7rem; font-weight: 600; }
+  .badge-httproute { background: #fef3c7; color: #92400e; }
+  .badge-tls { background: #d1fae5; color: #065f46; }
+  .empty { text-align: center; color: #888; padding: 3rem; }
+  .refresh { font-size: 0.75rem; cursor: pointer; background: none; border: 1px solid #ccc; border-radius: 4px; padding: 0.3rem 0.6rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>{{.Title}}</h1>
+  <span class="meta">{{.Namespace}}/{{.Name}} &bull; {{.TotalEndpoints}} endpoint{{if ne .TotalEndpoints 1}}s{{end}}</span>
+</header>
+
+<div class="toolbar">
+  <label>Group by
+    <select id="groupBy" onchange="render()">
+      <option value="namespace">Namespace</option>
+      <option value="none">None</option>
+    </select>
+  </label>
+  <label>Filter namespace
+    <input id="filterNS" type="text" placeholder="all" oninput="render()">
+  </label>
+  <label>Filter status
+    <select id="filterStatus" onchange="render()">
+      <option value="">All</option>
+      <option value="Healthy">Healthy</option>
+      <option value="Unhealthy">Unhealthy</option>
+      <option value="Unknown">Unknown</option>
+    </select>
+  </label>
+  <label>Filter type
+    <select id="filterType" onchange="render()">
+      <option value="">All</option>
+      <option value="Ingress">Ingress</option>
+      <option value="HTTPRoute">HTTPRoute</option>
+    </select>
+  </label>
+  <button class="refresh" onclick="location.reload()">&#8635; Refresh</button>
+</div>
+
+<div class="main" id="main"></div>
+
+<script>
+const ENDPOINTS = {{.EndpointsJSON}};
+
+function dotClass(ep) {
+  if (!ep.HealthPath) return 'dot-nocheck';
+  switch (ep.Health) {
+    case 'Healthy':   return 'dot-healthy';
+    case 'Unhealthy': return 'dot-unhealthy';
+    default:          return 'dot-unknown';
+  }
+}
+
+function scheme(ep) { return ep.TLS ? 'https' : 'http'; }
+function cardURL(ep) { return scheme(ep) + '://' + ep.Host + ep.Path; }
+
+function render() {
+  const groupBy = document.getElementById('groupBy').value;
+  const filterNS = document.getElementById('filterNS').value.trim().toLowerCase();
+  const filterStatus = document.getElementById('filterStatus').value;
+  const filterType = document.getElementById('filterType').value;
+
+  let eps = ENDPOINTS.filter(ep => {
+    if (filterNS && !ep.SourceRef.Namespace.toLowerCase().includes(filterNS)) return false;
+    if (filterStatus && ep.Health !== filterStatus) return false;
+    if (filterType && ep.SourceKind !== filterType) return false;
+    return true;
+  });
+
+  const main = document.getElementById('main');
+  if (eps.length === 0) {
+    main.innerHTML = '<div class="empty">No endpoints match the current filters.</div>';
+    return;
+  }
+
+  let html = '';
+  if (groupBy === 'namespace') {
+    const groups = {};
+    eps.forEach(ep => {
+      const g = ep.SourceRef.Namespace;
+      (groups[g] = groups[g] || []).push(ep);
+    });
+    Object.keys(groups).sort().forEach(g => {
+      html += '<div class="group-header">' + escHtml(g) + '</div><div class="cards">';
+      groups[g].forEach(ep => { html += cardHTML(ep); });
+      html += '</div>';
+    });
+  } else {
+    html = '<div class="cards">' + eps.map(cardHTML).join('') + '</div>';
+  }
+  main.innerHTML = html;
+}
+
+function cardHTML(ep) {
+  const url = cardURL(ep);
+  const dot = dotClass(ep);
+  const kind = ep.SourceKind === 'HTTPRoute' ? 'badge-httproute' : '';
+  return `<a class="card" href="${escHtml(url)}" target="_blank" rel="noopener">
+    <div class="card-top">
+      <span class="dot ${dot}" title="${escHtml(ep.Health || 'no healthcheck')}"></span>
+      <span class="card-host">${escHtml(ep.Host)}</span>
+    </div>
+    <div class="card-path">${escHtml(ep.Path)}</div>
+    <div class="card-meta">
+      <span class="badge ${kind}">${escHtml(ep.SourceKind)}</span>
+      ${ep.TLS ? '<span class="badge badge-tls">TLS</span>' : ''}
+      ${ep.Backend ? '<span>' + escHtml(ep.Backend) + '</span>' : ''}
+    </div>
+  </a>`;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+render();
+</script>
+</body>
+</html>

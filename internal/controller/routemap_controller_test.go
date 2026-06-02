@@ -18,67 +18,277 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
+
+	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	routemapsv1alpha1 "github.com/dmakeienko/routemap-operator/api/v1alpha1"
+	"github.com/dmakeienko/routemap-operator/internal/inventory"
+	"github.com/dmakeienko/routemap-operator/internal/store"
 )
 
+const dashboardAddr = "http://localhost:9090"
+
 var _ = Describe("Routemap Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	const (
+		routemapName = "test-routemap"
+		testNS       = "default"
+		timeout      = 5 * time.Second
+		interval     = 100 * time.Millisecond
+	)
 
-		ctx := context.Background()
+	ctx := context.Background()
+	key := types.NamespacedName{Name: routemapName, Namespace: testNS}
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+	newReconciler := func() *RoutemapReconciler {
+		return &RoutemapReconciler{
+			Client:             k8sClient,
+			Scheme:             k8sClient.Scheme(),
+			Store:              store.New(),
+			DashboardBindAddr:  dashboardAddr,
+			HTTPRouteAvailable: false,
 		}
-		routemap := &routemapsv1alpha1.Routemap{}
+	}
 
+	Context("When reconciling a Routemap with no sources", func() {
 		BeforeEach(func() {
-			By("creating the custom resource for the Kind Routemap")
-			err := k8sClient.Get(ctx, typeNamespacedName, routemap)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &routemapsv1alpha1.Routemap{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+			By("Creating the Routemap CR")
+			rm := &routemapsv1alpha1.Routemap{
+				ObjectMeta: metav1.ObjectMeta{Name: routemapName, Namespace: testNS},
+				Spec:       routemapsv1alpha1.RoutemapSpec{},
+			}
+			err := k8sClient.Get(ctx, key, &routemapsv1alpha1.Routemap{})
+			if apierrors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, rm)).To(Succeed())
 			}
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &routemapsv1alpha1.Routemap{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			rm := &routemapsv1alpha1.Routemap{}
+			if err := k8sClient.Get(ctx, key, rm); err == nil {
+				rm.Finalizers = nil
+				_ = k8sClient.Update(ctx, rm)
+				_ = k8sClient.Delete(ctx, rm)
+			}
+		})
+
+		It("should reconcile without error and set status", func() {
+			r := newReconciler()
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance Routemap")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			// Second reconcile (adds finalizer on first, reconciles on second).
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			Eventually(func() bool {
+				var rm routemapsv1alpha1.Routemap
+				if err := k8sClient.Get(ctx, key, &rm); err != nil {
+					return false
+				}
+				return rm.Status.DashboardURL != ""
+			}, timeout, interval).Should(BeTrue())
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &RoutemapReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+	})
+
+	Context("When reconciling a Routemap with an Ingress in scope", func() {
+		const ingressName = "test-ingress"
+		prefixType := networkingv1.PathTypePrefix
+
+		BeforeEach(func() {
+			By("Creating the Ingress")
+			ing := &networkingv1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{Name: ingressName, Namespace: testNS},
+				Spec: networkingv1.IngressSpec{
+					Rules: []networkingv1.IngressRule{
+						{
+							Host: "app.example.com",
+							IngressRuleValue: networkingv1.IngressRuleValue{
+								HTTP: &networkingv1.HTTPIngressRuleValue{
+									Paths: []networkingv1.HTTPIngressPath{
+										{
+											Path:     "/",
+											PathType: &prefixType,
+											Backend: networkingv1.IngressBackend{
+												Service: &networkingv1.IngressServiceBackend{
+													Name: "app-svc",
+													Port: networkingv1.ServiceBackendPort{Number: 80},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+			existing := &networkingv1.Ingress{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: ingressName, Namespace: testNS}, existing); apierrors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, ing)).To(Succeed())
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
+			By("Creating the Routemap CR")
+			rm := &routemapsv1alpha1.Routemap{
+				ObjectMeta: metav1.ObjectMeta{Name: routemapName, Namespace: testNS},
+				Spec: routemapsv1alpha1.RoutemapSpec{
+					Sources: []routemapsv1alpha1.SourceKind{routemapsv1alpha1.SourceKindIngress},
+				},
+			}
+			if err := k8sClient.Get(ctx, key, &routemapsv1alpha1.Routemap{}); apierrors.IsNotFound(err) {
+				Expect(k8sClient.Create(ctx, rm)).To(Succeed())
+			}
+		})
+
+		AfterEach(func() {
+			_ = k8sClient.Delete(ctx, &networkingv1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{Name: ingressName, Namespace: testNS},
 			})
+			rm := &routemapsv1alpha1.Routemap{}
+			if err := k8sClient.Get(ctx, key, rm); err == nil {
+				rm.Finalizers = nil
+				_ = k8sClient.Update(ctx, rm)
+				_ = k8sClient.Delete(ctx, rm)
+			}
+		})
+
+		It("should discover the Ingress and populate Store", func() {
+			s := store.New()
+			r := &RoutemapReconciler{
+				Client:             k8sClient,
+				Scheme:             k8sClient.Scheme(),
+				Store:              s,
+				DashboardBindAddr:  dashboardAddr,
+				HTTPRouteAvailable: false,
+			}
+
+			// First reconcile adds finalizer.
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			// Second reconcile does discovery.
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			view, ok := s.Get(key)
+			Expect(ok).To(BeTrue())
+			Expect(view.Endpoints).To(HaveLen(1))
+			Expect(view.Endpoints[0].Host).To(Equal("app.example.com"))
+			Expect(view.Endpoints[0].Backend).To(Equal("app-svc:80"))
+		})
+
+		It("should set DiscoveredEndpoints in status", func() {
+			s := store.New()
+			r := &RoutemapReconciler{
+				Client:             k8sClient,
+				Scheme:             k8sClient.Scheme(),
+				Store:              s,
+				DashboardBindAddr:  dashboardAddr,
+				HTTPRouteAvailable: false,
+			}
+			_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+
+			Eventually(func() int32 {
+				var rm routemapsv1alpha1.Routemap
+				if err := k8sClient.Get(ctx, key, &rm); err != nil {
+					return -1
+				}
+				return rm.Status.DiscoveredEndpoints
+			}, timeout, interval).Should(BeNumerically(">=", int32(1)))
+		})
+	})
+
+	Context("When a Routemap is deleted", func() {
+		It("should remove the view from Store on not-found", func() {
+			s := store.New()
+			notFoundKey := types.NamespacedName{Name: "gone", Namespace: testNS}
+			s.Set(notFoundKey, store.RoutemapView{})
+
+			r := &RoutemapReconciler{
+				Client:             k8sClient,
+				Scheme:             k8sClient.Scheme(),
+				Store:              s,
+				DashboardBindAddr:  dashboardAddr,
+				HTTPRouteAvailable: false,
+			}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: notFoundKey})
+			Expect(err).NotTo(HaveOccurred())
+			_, ok := s.Get(notFoundKey)
+			Expect(ok).To(BeFalse())
+		})
+	})
+
+	Context("Helper functions", func() {
+		It("effectiveSources returns defaults when nil", func() {
+			sources := effectiveSources(nil)
+			Expect(sources).To(ContainElements(
+				routemapsv1alpha1.SourceKindIngress,
+				routemapsv1alpha1.SourceKindHTTPRoute,
+			))
+		})
+
+		It("defaultAnnotationKey returns custom key when set", func() {
+			key := defaultAnnotationKey(&routemapsv1alpha1.HealthCheckSpec{AnnotationKey: "custom/key"})
+			Expect(key).To(Equal("custom/key"))
+		})
+
+		It("defaultAnnotationKey returns default when empty", func() {
+			key := defaultAnnotationKey(nil)
+			Expect(key).To(Equal("routemap.github.com/healthcheck"))
+		})
+
+		It("containsString works correctly", func() {
+			Expect(containsString([]string{"a", "b"}, "a")).To(BeTrue())
+			Expect(containsString([]string{"a", "b"}, "c")).To(BeFalse())
+		})
+
+		It("removeString removes the target", func() {
+			result := removeString([]string{"a", "b", "c"}, "b")
+			Expect(result).To(Equal([]string{"a", "c"}))
+		})
+
+		It("namespaceMatchesRoutemap covers watchAll", func() {
+			rm := routemapsv1alpha1.Routemap{
+				Spec: routemapsv1alpha1.RoutemapSpec{
+					Namespaces: routemapsv1alpha1.NamespaceSelector{WatchAll: true},
+				},
+			}
+			Expect(namespaceMatchesRoutemap("any-ns", rm)).To(BeTrue())
+		})
+
+		It("namespaceMatchesRoutemap covers explicit Names", func() {
+			rm := routemapsv1alpha1.Routemap{
+				Spec: routemapsv1alpha1.RoutemapSpec{
+					Namespaces: routemapsv1alpha1.NamespaceSelector{Names: []string{"prod"}},
+				},
+			}
+			Expect(namespaceMatchesRoutemap("prod", rm)).To(BeTrue())
+			Expect(namespaceMatchesRoutemap("staging", rm)).To(BeFalse())
+		})
+
+		It("namespaceMatchesRoutemap defaults to own namespace", func() {
+			rm := routemapsv1alpha1.Routemap{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "myns"},
+			}
+			Expect(namespaceMatchesRoutemap("myns", rm)).To(BeTrue())
+			Expect(namespaceMatchesRoutemap("other", rm)).To(BeFalse())
+		})
+
+		It("countHealthy counts only Healthy endpoints", func() {
+			eps := []inventory.Endpoint{
+				{Health: inventory.HealthStateHealthy},
+				{Health: inventory.HealthStateUnhealthy},
+				{Health: inventory.HealthStateUnknown},
+			}
+			Expect(countHealthy(eps)).To(Equal(1))
 		})
 	})
 })
