@@ -1,26 +1,31 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "release-type": "simple",
-  "bump-minor-pre-major": true,
-  "extra-files": [
-    {
-      "type": "yaml",
-      "path": "charts/routemap-operator/Chart.yaml",
-      "jsonpath": "$.version"
-    },
-    {
-      "type": "yaml",
-      "path": "charts/routemap-operator/Chart.yaml",
-      "jsonpath": "$.appVersion"
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "bump-minor-pre-major": true,
+      "last-release-sha": "ec2a94ab54b9ba33dfce37237d095fb4c31c4aaa",
+      "extra-files": [
+        {
+          "type": "yaml",
+          "path": "charts/routemap-operator/Chart.yaml",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "yaml",
+          "path": "charts/routemap-operator/Chart.yaml",
+          "jsonpath": "$.appVersion"
+        }
+      ],
+      "changelog-sections": [
+        { "type": "feat", "section": "Features" },
+        { "type": "fix", "section": "Bug Fixes" },
+        { "type": "docs", "section": "Documentation" },
+        { "type": "ci", "section": "CI/CD" },
+        { "type": "chore", "section": "Chores", "hidden": false },
+        { "type": "refactor", "section": "Code Refactoring" },
+        { "type": "perf", "section": "Performance Improvements" }
+      ]
     }
-  ],
-  "changelog-sections": [
-    { "type": "feat", "section": "Features" },
-    { "type": "fix", "section": "Bug Fixes" },
-    { "type": "docs", "section": "Documentation" },
-    { "type": "ci", "section": "CI/CD" },
-    { "type": "chore", "section": "Chores", "hidden": false },
-    { "type": "refactor", "section": "Code Refactoring" },
-    { "type": "perf", "section": "Performance Improvements" }
-  ]
+  }
 }
