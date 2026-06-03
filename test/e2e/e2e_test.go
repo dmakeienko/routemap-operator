@@ -48,49 +48,15 @@ const metricsRoleBindingName = "routemap-operator-metrics-binding"
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
-	// Before running the tests, set up the environment by creating the namespace,
-	// enforce the restricted security policy to the namespace, installing CRDs,
-	// and deploying the controller.
-	BeforeAll(func() {
-		By("creating manager namespace")
-		cmd := exec.Command("kubectl", "create", "ns", namespace)
-		_, err := utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
-
-		By("labeling the namespace to enforce the restricted security policy")
-		cmd = exec.Command("kubectl", "label", "--overwrite", "ns", namespace,
-			"pod-security.kubernetes.io/enforce=restricted")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
-
-		By("installing CRDs")
-		cmd = exec.Command("make", "install")
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
-
-		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
-		_, err = utils.Run(cmd)
-		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
-	})
+	// BeforeSuite already creates the namespace, installs CRDs, and deploys the controller.
+	// Nothing additional needed here before the Manager tests run.
+	BeforeAll(func() {})
 
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
 	// and deleting the namespace.
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
-		_, _ = utils.Run(cmd)
-
-		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
-
-		By("uninstalling CRDs")
-		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
-
-		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
 		_, _ = utils.Run(cmd)
 	})
 
@@ -175,15 +141,24 @@ var _ = Describe("Manager", Ordered, func() {
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=routemap-operator-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
-			)
-			_, err := utils.Run(cmd)
+			err := kubectlApply(fmt.Sprintf(`
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: %s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: routemap-operator-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: %s
+  namespace: %s
+`, metricsRoleBindingName, serviceAccountName, namespace))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
 
 			By("validating that the metrics service is available")
-			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
+			cmd := exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
 
@@ -215,7 +190,7 @@ var _ = Describe("Manager", Ordered, func() {
 			// +kubebuilder:scaffold:e2e-metrics-webhooks-readiness
 
 			By("creating the curl-metrics pod to access the metrics endpoint")
-			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
+			curlCmd := exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
 				"--namespace", namespace,
 				"--image=curlimages/curl:latest",
 				"--overrides",
@@ -244,7 +219,7 @@ var _ = Describe("Manager", Ordered, func() {
 						"serviceAccountName": "%s"
 					}
 				}`, token, metricsServiceName, namespace, serviceAccountName))
-			_, err = utils.Run(cmd)
+			_, err = utils.Run(curlCmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create curl-metrics pod")
 
 			By("waiting for the curl-metrics pod to complete.")
@@ -264,6 +239,8 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
 				g.Expect(metricsOutput).NotTo(BeEmpty())
 				g.Expect(metricsOutput).To(ContainSubstring("< HTTP/1.1 200 OK"))
+				g.Expect(metricsOutput).To(ContainSubstring("controller_runtime_reconcile_total"),
+					"Prometheus metrics should include controller_runtime_reconcile_total")
 			}
 			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
 		})
@@ -279,6 +256,188 @@ var _ = Describe("Manager", Ordered, func() {
 		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
 		//    strings.ToLower(<Kind>),
 		// ))
+	})
+})
+
+// routemapTestNamespace is a dedicated namespace used by Routemap CR tests so they
+// are isolated from the controller's own namespace and can be deleted cleanly.
+const routemapTestNamespace = "routemap-e2e-test"
+
+var _ = Describe("Routemap", Ordered, func() {
+	BeforeAll(func() {
+		By("creating test namespace for Routemap CRs")
+		cmd := exec.Command("kubectl", "create", "ns", routemapTestNamespace)
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to create test namespace")
+	})
+
+	AfterAll(func() {
+		By("deleting test namespace for Routemap CRs")
+		cmd := exec.Command("kubectl", "delete", "ns", routemapTestNamespace, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+	})
+
+	SetDefaultEventuallyTimeout(2 * time.Minute)
+	SetDefaultEventuallyPollingInterval(time.Second)
+
+	Context("CR lifecycle", func() {
+		const routemapName = "e2e-routemap"
+
+		AfterEach(func() {
+			// Best-effort removal so subsequent tests start clean.
+			cmd := exec.Command("kubectl", "delete", "routemap", routemapName,
+				"-n", routemapTestNamespace, "--ignore-not-found")
+			_, _ = utils.Run(cmd)
+		})
+
+		It("should reconcile and report Ready condition", func() {
+			By("creating a Routemap CR that watches its own namespace")
+			err := kubectlApply(fmt.Sprintf(`
+apiVersion: routemaps.github.com/v1alpha1
+kind: Routemap
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  displayName: "E2E Test Routemap"
+  namespaces:
+    names:
+      - %s
+  sources:
+    - Ingress
+`, routemapName, routemapTestNamespace, routemapTestNamespace))
+			Expect(err).NotTo(HaveOccurred(), "Failed to create Routemap CR")
+
+			By("waiting for the Routemap to have Ready=True condition")
+			verifyReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "routemap", routemapName,
+					"-n", routemapTestNamespace,
+					"-o", `jsonpath={.status.conditions[?(@.type=='Ready')].status}`)
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"), "Routemap Ready condition not True")
+			}
+			Eventually(verifyReady).Should(Succeed())
+
+			By("verifying ObservedGeneration is set on the status")
+			genCmd := exec.Command("kubectl", "get", "routemap", routemapName,
+				"-n", routemapTestNamespace,
+				"-o", "jsonpath={.status.observedGeneration}")
+			output, err := utils.Run(genCmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).NotTo(BeEmpty(), "ObservedGeneration should be set")
+			Expect(output).NotTo(Equal("0"), "ObservedGeneration should be non-zero")
+		})
+
+		It("should discover Ingresses and increment discoveredEndpoints", func() {
+			By("creating a Routemap CR scoped to the test namespace")
+			err := kubectlApply(fmt.Sprintf(`
+apiVersion: routemaps.github.com/v1alpha1
+kind: Routemap
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  namespaces:
+    names:
+      - %s
+  sources:
+    - Ingress
+`, routemapName, routemapTestNamespace, routemapTestNamespace))
+			Expect(err).NotTo(HaveOccurred(), "Failed to create Routemap CR")
+
+			By("waiting for initial reconciliation")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "routemap", routemapName,
+					"-n", routemapTestNamespace,
+					"-o", `jsonpath={.status.conditions[?(@.type=='Ready')].status}`)
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}).Should(Succeed())
+
+			By("creating an Ingress in the watched namespace")
+			err = kubectlApply(fmt.Sprintf(`
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: e2e-test-ingress
+  namespace: %s
+spec:
+  rules:
+    - host: e2e.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: fake-svc
+                port:
+                  number: 80
+`, routemapTestNamespace))
+			Expect(err).NotTo(HaveOccurred(), "Failed to create test Ingress")
+
+			By("waiting for discoveredEndpoints to become >= 1")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "routemap", routemapName,
+					"-n", routemapTestNamespace,
+					"-o", "jsonpath={.status.discoveredEndpoints}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).NotTo(BeEmpty())
+				g.Expect(output).NotTo(Equal("0"), "Expected at least one discovered endpoint")
+			}).Should(Succeed())
+
+			By("cleaning up the test Ingress")
+			delCmd := exec.Command("kubectl", "delete", "ingress", "e2e-test-ingress",
+				"-n", routemapTestNamespace, "--ignore-not-found")
+			_, _ = utils.Run(delCmd)
+		})
+
+		It("should remove the finalizer and delete cleanly", func() {
+			By("creating a Routemap CR")
+			err := kubectlApply(fmt.Sprintf(`
+apiVersion: routemaps.github.com/v1alpha1
+kind: Routemap
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  namespaces:
+    names:
+      - %s
+  sources:
+    - Ingress
+`, routemapName, routemapTestNamespace, routemapTestNamespace))
+			Expect(err).NotTo(HaveOccurred(), "Failed to create Routemap CR")
+
+			By("waiting for the finalizer to be set")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "routemap", routemapName,
+					"-n", routemapTestNamespace,
+					"-o", "jsonpath={.metadata.finalizers}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(ContainSubstring("routemaps.github.com/finalizer"))
+			}).Should(Succeed())
+
+			By("deleting the Routemap CR")
+			delCmd := exec.Command("kubectl", "delete", "routemap", routemapName,
+				"-n", routemapTestNamespace)
+			_, err = utils.Run(delCmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to delete Routemap CR")
+
+			By("verifying the Routemap CR is fully removed")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "routemap", routemapName,
+					"-n", routemapTestNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "Routemap should be gone after deletion")
+				g.Expect(err.Error()).To(ContainSubstring("NotFound"),
+					"Expected NotFound error, got: %v", err)
+			}).Should(Succeed())
+		})
 	})
 })
 
@@ -328,6 +487,25 @@ func getMetricsOutput() (string, error) {
 	By("getting the curl-metrics logs")
 	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
 	return utils.Run(cmd)
+}
+
+// kubectlApply writes yaml to a temp file and runs kubectl apply -f <file>.
+// Using a file avoids stdin interaction issues with utils.Run's CombinedOutput.
+func kubectlApply(yaml string) error {
+	f, err := os.CreateTemp("", "e2e-*.yaml")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(yaml); err != nil {
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+	cmd := exec.Command("kubectl", "apply", "-f", f.Name())
+	_, err = utils.Run(cmd)
+	return err
 }
 
 // tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,
