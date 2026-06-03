@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // SourceKind enumerates the discoverable resource types.
@@ -182,5 +183,8 @@ type RoutemapList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&Routemap{}, &RoutemapList{})
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion, &Routemap{}, &RoutemapList{})
+		return nil
+	})
 }

@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -307,7 +308,7 @@ func setReadyCondition(rm *routemapsv1alpha1.Routemap, httprouteUnavailable bool
 func (r *RoutemapReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Probe HTTPRoute CRD via RESTMapper.
 	mapper := mgr.GetRESTMapper()
-	_, err := mapper.RESTMapping(gatewayv1.SchemeGroupVersion.WithKind("HTTPRoute").GroupKind())
+	_, err := mapper.RESTMapping(schema.GroupKind{Group: gatewayv1.GroupName, Kind: "HTTPRoute"})
 	r.HTTPRouteAvailable = err == nil
 
 	log := mgr.GetLogger().WithName("routemap-setup")
