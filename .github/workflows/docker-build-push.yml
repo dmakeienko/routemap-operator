@@ -1,7 +1,11 @@
 name: Docker Build and Push
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
     branches:
       - main
   release:
@@ -16,6 +20,10 @@ permissions: {}
 
 jobs:
   docker:
+    # For workflow_run: only push when CI passed. Releases are always built.
+    if: >-
+      github.event_name == 'release' ||
+      github.event.workflow_run.conclusion == 'success'
     permissions:
       contents: read
     name: Build and Push
@@ -24,6 +32,8 @@ jobs:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          # For workflow_run events the triggering SHA must be checked out explicitly.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
           persist-credentials: false
 
       - name: Set up QEMU
@@ -44,9 +54,9 @@ jobs:
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/routemap-operator
           tags: |
-            type=raw,value=latest,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-            type=raw,value=main,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-            type=raw,value=main-${{ github.sha }},enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_run' }}
+            type=raw,value=main,enable=${{ github.event_name == 'workflow_run' }}
+            type=raw,value=main-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }},enable=${{ github.event_name == 'workflow_run' }}
             type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
 
@@ -58,5 +68,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ github.ref_name }}-${{ matrix.platform || 'multi' }}
-          cache-to: type=gha,mode=max,scope=${{ github.ref_name }}-${{ matrix.platform || 'multi' }}
+          cache-from: type=gha,scope=main-multi
+          cache-to: type=gha,mode=max,scope=main-multi
