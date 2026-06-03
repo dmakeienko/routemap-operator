@@ -160,6 +160,7 @@ jobs:
     needs: [lint, verify, test, helm]
     env:
       KIND_VERSION: v0.31.0
+      KIND_CLUSTER: routemap-operator-test-e2e
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -171,7 +172,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Cache kind binary
+        id: cache-kind
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: /usr/local/bin/kind
+          key: kind-${{ env.KIND_VERSION }}-linux-amd64
+
       - name: Install kind
+        if: steps.cache-kind.outputs.cache-hit != 'true'
         run: |
           curl -Lo ./kind "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-$(go env GOARCH)"
           chmod +x ./kind
@@ -180,5 +189,41 @@ jobs:
       - name: Verify kind installation
         run: kind version
 
+      - name: Cache kindest/node image
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: /tmp/kindest-node.tar
+          key: kindest-node-${{ hashFiles('**/go.mod') }}-${{ env.KIND_VERSION }}
+
+      - name: Pre-load kindest/node image
+        run: |
+          K8S_VERSION=$(grep 'kindest/node' test/e2e/e2e_suite_test.go 2>/dev/null | grep -oP 'v[\d.]+' | head -1 || echo "v1.35.0")
+          if [ -f /tmp/kindest-node.tar ]; then
+            echo "Loading kindest/node:${K8S_VERSION} from cache"
+            docker load -i /tmp/kindest-node.tar
+          else
+            echo "Pulling kindest/node:${K8S_VERSION} and saving to cache"
+            docker pull "kindest/node:${K8S_VERSION}"
+            docker save "kindest/node:${K8S_VERSION}" -o /tmp/kindest-node.tar
+          fi
+
       - name: Run e2e tests
         run: make test-e2e
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        run: |
+          echo "=== kind cluster info ==="
+          kind get clusters || true
+          echo "=== kubectl cluster-info ==="
+          kubectl cluster-info --context "kind-${KIND_CLUSTER}" || true
+          echo "=== all pods ==="
+          kubectl get pods -A || true
+          echo "=== controller-manager logs ==="
+          kubectl logs -l control-plane=controller-manager -n routemap-operator-system --tail=100 || true
+          echo "=== events ==="
+          kubectl get events -A --sort-by='.lastTimestamp' | tail -40 || true
+
+      - name: Cleanup kind cluster on failure
+        if: failure()
+        run: kind delete cluster --name "${KIND_CLUSTER}" || true
