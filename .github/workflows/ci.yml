@@ -161,6 +161,7 @@ jobs:
     env:
       KIND_VERSION: v0.31.0
       KIND_CLUSTER: routemap-operator-test-e2e
+      K8S_VERSION: v1.32.2
     steps:
       - name: Clone the code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -193,11 +194,10 @@ jobs:
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: /tmp/kindest-node.tar
-          key: kindest-node-${{ hashFiles('**/go.mod') }}-${{ env.KIND_VERSION }}
+          key: kindest-node-${{ env.K8S_VERSION }}
 
       - name: Pre-load kindest/node image
         run: |
-          K8S_VERSION=$(grep 'kindest/node' test/e2e/e2e_suite_test.go 2>/dev/null | grep -oP 'v[\d.]+' | head -1 || echo "v1.35.0")
           if [ -f /tmp/kindest-node.tar ]; then
             echo "Loading kindest/node:${K8S_VERSION} from cache"
             docker load -i /tmp/kindest-node.tar

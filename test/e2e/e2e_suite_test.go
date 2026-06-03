@@ -33,7 +33,7 @@ import (
 
 var (
 	// managerImage is the manager image to be built and loaded for testing.
-	managerImage = "example.com/routemap-operator:v0.0.1"
+	managerImage = "dmakeienko12/routemap-operator:e2e"
 	// shouldCleanupCertManager tracks whether CertManager was installed by this suite.
 	shouldCleanupCertManager = false
 )
@@ -64,9 +64,41 @@ var _ = BeforeSuite(func() {
 
 	configureKubectlKubeRC()
 	setupCertManager()
+
+	By("creating manager namespace")
+	cmd = exec.Command("kubectl", "create", "ns", "routemap-operator-system")
+	_, _ = utils.Run(cmd) // ignore error if namespace already exists
+
+	By("labeling the namespace to enforce the restricted security policy")
+	cmd = exec.Command("kubectl", "label", "--overwrite", "ns", "routemap-operator-system",
+		"pod-security.kubernetes.io/enforce=restricted")
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
+
+	By("installing CRDs")
+	cmd = exec.Command("make", "install")
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to install CRDs")
+
+	By("deploying the controller-manager")
+	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 })
 
 var _ = AfterSuite(func() {
+	By("undeploying the controller-manager")
+	cmd := exec.Command("make", "undeploy")
+	_, _ = utils.Run(cmd)
+
+	By("uninstalling CRDs")
+	cmd = exec.Command("make", "uninstall")
+	_, _ = utils.Run(cmd)
+
+	By("removing manager namespace")
+	cmd = exec.Command("kubectl", "delete", "ns", "routemap-operator-system", "--ignore-not-found")
+	_, _ = utils.Run(cmd)
+
 	teardownCertManager()
 })
 
