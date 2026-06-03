@@ -20,20 +20,22 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"sigs.k8s.io/controller-runtime/pkg/scheme"
 )
 
 var (
-	// SchemeGroupVersion is group version used to register these objects.
-	// This name is used by applyconfiguration generators (e.g. controller-gen).
-	SchemeGroupVersion = schema.GroupVersion{Group: "routemaps.github.com", Version: "v1alpha1"}
+	// GroupVersion is the group version used to register these objects.
+	GroupVersion = schema.GroupVersion{Group: "routemaps.github.com", Version: "v1alpha1"}
 
-	// GroupVersion is an alias for SchemeGroupVersion, for backward compatibility.
-	GroupVersion = SchemeGroupVersion
+	// SchemeGroupVersion is an alias for GroupVersion, kept for compatibility with
+	// applyconfiguration generators (e.g. controller-gen).
+	SchemeGroupVersion = GroupVersion
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme.
-	SchemeBuilder = &scheme.Builder{GroupVersion: SchemeGroupVersion}
+	SchemeBuilder = runtime.NewSchemeBuilder(func(s *runtime.Scheme) error {
+		return s.SetVersionPriority(GroupVersion)
+	})
 
 	// AddToScheme adds the types in this group-version to the given scheme.
 	AddToScheme = SchemeBuilder.AddToScheme
