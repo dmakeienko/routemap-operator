@@ -1,0 +1,26 @@
+apiVersion: v1
+entries:
+  routemap-operator:
+  - apiVersion: v2
+    appVersion: 0.1.1
+    created: "2026-06-04T06:24:23.016776167Z"
+    description: A Kubernetes operator that builds a live route map of your cluster's
+      HTTP endpoints
+    digest: adcc73bbfaf3a5e18634d81b475e33de4be0022021818921886b587a4a5505e4
+    home: https://github.com/dmakeienko/routemap-operator
+    keywords:
+    - kubernetes
+    - operator
+    - routing
+    - ingress
+    - gateway-api
+    maintainers:
+    - name: dmakeienko
+    name: routemap-operator
+    sources:
+    - https://github.com/dmakeienko/routemap-operator
+    type: application
+    urls:
+    - https://github.com/dmakeienko/routemap-operator/releases/download/routemap-operator-0.1.1/routemap-operator-0.1.1.tgz
+    version: 0.1.1
+generated: "2026-06-04T06:24:23.016781575Z"
