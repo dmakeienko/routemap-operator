@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/dmakeienko/routemap-operator/compare/v0.1.0...v0.1.1) (2026-06-04)
+
+
+### Bug Fixes
+
+* this is a maintenance release to fix the helm release action ([#14](https://github.com/dmakeienko/routemap-operator/issues/14)) ([3905b48](https://github.com/dmakeienko/routemap-operator/commit/3905b48e67fa5849d59bab22428e6844e05935c6))
+
 ## 0.1.0 (2026-06-03)
 
 
