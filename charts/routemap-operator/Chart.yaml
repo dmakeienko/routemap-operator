@@ -4,8 +4,8 @@ description: >-
   A Kubernetes operator that builds a live route map of your cluster's HTTP
   endpoints
 type: application
-version: 0.1.1
-appVersion: 0.1.1
+version: 0.1.2
+appVersion: 0.1.2
 keywords:
   - kubernetes
   - operator

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2](https://github.com/dmakeienko/routemap-operator/compare/v0.1.1...v0.1.2) (2026-06-22)
+
+
+### Chores
+
+* **deps:** bump SonarSource/sonarqube-scan-action ([6af5a1f](https://github.com/dmakeienko/routemap-operator/commit/6af5a1fd5672e97d3f23403bef4db00b6849e576))
+* **deps:** bump SonarSource/sonarqube-scan-action from 8.1.0 to 8.2.0 in the github-actions group ([2440c86](https://github.com/dmakeienko/routemap-operator/commit/2440c86b65ebf339684e77dac05583bfc8b9157e))
+
 ## [0.1.1](https://github.com/dmakeienko/routemap-operator/compare/v0.1.0...v0.1.1) (2026-06-04)
 
 
